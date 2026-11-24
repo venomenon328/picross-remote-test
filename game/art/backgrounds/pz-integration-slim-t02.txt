@@ -1,0 +1,4 @@
+author: Codex, technische Testbereitstellung A01/T02
+changes: Direkt als transparente PNG-Testzeichnung erstellt
+source: Eigene synthetische Strichzeichnung für das T02-Testfixture
+usage_basis: Eigenes Testoriginal zur Verwendung im isolierten T02-Durchstich
