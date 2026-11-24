@@ -76,7 +76,8 @@ class RemoteTests(unittest.TestCase):
             head = self.pr['head']['sha']
             merge = 'd' * 40 if self.state == 'wrong-merge' else self.pr['merge_commit_sha']
             names = ('docs',) if self.state == 'missing-job' else ('docs', 'verify (source)', 'ci-required')
-            return {'total_count': len(names), 'jobs': [{'name': n, 'head_sha': head, 'run_id': 11, 'conclusion': 'success',
+            return {'total_count': len(names) + 1, 'jobs': [{'name': 'review-attachment', 'head_sha': head, 'run_id': 11,
+                'conclusion': 'skipped'}] + [{'name': n, 'head_sha': head, 'run_id': 11, 'conclusion': 'success',
                 'steps': [{'name': f'PR 2 / {head} / {self.main} / {merge}', 'conclusion': 'success'}]} for n in names]}
         return self.fixture.api(path, method, value)
 
@@ -177,3 +178,61 @@ class RemoteTests(unittest.TestCase):
         self.assertIsNone(self.fixture.release)
         self.assertIsNone(git.remote_head(self.repo, current_ref))
         self.assertIsNone(git.remote_head(self.repo, 'refs/tags/work-prod-' + self.job))
+
+
+class RequestRefTests(unittest.TestCase):
+    def test_trigger_requires_exact_main_tree_parent_live_ref_and_payload(self):
+        main, source = 'a' * 40, 'b' * 40
+        req = {'format': 'pw-remote-v1', 'repository': pw.REPO, 'job': 'pz-current', 'operation': 'status',
+               'main': main, 'tools': main, 'expected': 'c' * 40, 'record_sha256': 'd' * 64,
+               'input': {}, 'product': 'e' * 40, 'pr': 2}
+        name, message = remote.envelope(req, 'execute')
+        ref = 'refs/heads/' + name
+        live = {'refs/heads/main': main, ref: source}
+        parent = {'sha': main, 'tree': {'sha': 'f' * 40}}
+        commit = {'sha': source, 'tree': parent['tree'], 'parents': [{'sha': main}], 'message': message}
+        with (patch.object(git, 'remote_head', side_effect=lambda _, r: live.get(r)),
+              patch.object(pw, 'api', side_effect=lambda path: parent if path.endswith(main) else commit)):
+            self.assertEqual(remote.verify_request('.', name, source, main), (req, 'execute'))
+            for bad in ({'tree': {'sha': source}}, {'parents': []}, {'parents': [parent, parent]},
+                        {'message': message.replace('execute', 'preflight')}, {'message': message + ' extra'}):
+                with patch.dict(commit, bad), self.assertRaises(ValueError):
+                    remote.verify_request('.', name, source, main)
+            with patch.dict(live, {ref: main}), self.assertRaisesRegex(ValueError, 'withdrawn'):
+                remote.verify_request('.', name, source, main)
+            with patch.dict(live, {'refs/heads/main': source}), self.assertRaisesRegex(ValueError, 'stale'):
+                remote.verify_request('.', name, source, main)
+
+    def test_concurrent_product_create_rejects_both_atomic_ref_changes(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / 'local'
+            target = Path(tmp) / 'target.git'
+            local.mkdir()
+            fixtures.git(local, 'init', '-qb', 'main')
+            fixtures.git(local, 'config', 'user.name', 'Fixture')
+            fixtures.git(local, 'config', 'user.email', 'fixture@example.invalid')
+            def commit(message):
+                fixtures.git(local, 'commit', '--allow-empty', '-qm', message)
+                return fixtures.git(local, 'rev-parse', 'HEAD')
+            main = commit('main')
+            fixtures.git(local, 'clone', '--bare', str(local), str(target))
+            work = commit('old work')
+            job = 'pz-current'
+            work_ref = 'refs/heads/content/pw/' + job
+            product_ref = 'refs/heads/' + prs.product_branch(job)
+            fixtures.git(local, 'push', str(target), work + ':' + work_ref)
+            successor = commit('completion')
+            fixtures.git(local, 'switch', '--detach', main)
+            product = commit('product')
+            original = git.git
+            def race(root, *args, **kwargs):
+                if '--atomic' in args:
+                    fixtures.git(target, 'update-ref', product_ref, main, '0' * 40)
+                return original(root, *args, **kwargs)
+            with (patch.object(git, 'REMOTE', str(target)), patch.object(git, 'CLEAN_MAIN', main),
+                  patch.object(git, 'git', side_effect=race),
+                  self.assertRaises((ValueError, subprocess.CalledProcessError))):
+                git.publish_completion(local, job, successor, work, product, main)
+            self.assertEqual(fixtures.git(target, 'rev-parse', work_ref), work)
+            self.assertEqual(fixtures.git(target, 'rev-parse', product_ref), main)
