@@ -3,7 +3,7 @@ import os
 
 TEST_REPO = 'venomenon328/picross-remote-test'
 TEST_ID = 1470169013
-TEST_JOB = 'pz-integration-slim-t02'
+TEST_JOB = 'pz-remote-c-t02'
 FIXTURE = (os.environ.get('PICROSS_PW_REMOTE_TEST') == '1' or
            os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('GITHUB_REPOSITORY') == TEST_REPO and
            os.environ.get('GITHUB_REPOSITORY_ID') == str(TEST_ID))
