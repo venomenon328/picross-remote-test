@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+/content/authoring/pz-*/**
+!/content/authoring/pz-*/current/
+!/content/authoring/pz-*/current/record.json
