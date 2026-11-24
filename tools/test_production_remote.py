@@ -67,7 +67,8 @@ class RemoteTests(unittest.TestCase):
         self.enterContext(patch.object(pw, 'api', side_effect=self.api))
         self.enterContext(patch.object(pw, 'remote_record', side_effect=self.read_record))
         method = 'content/difficulty-method.json'
-        (self.f.root / method).write_bytes((remote.TOOLS / method).read_bytes())
+        for name in (method, 'game/data/background-capability.json'):
+            (self.f.root / name).write_bytes((remote.TOOLS / name).read_bytes())
         self.main = fixtures.commit(self.f.root, 'synthetic current method')
         fixtures.git(self.f.root, 'push', str(self.repo), self.main + ':refs/heads/main')
         self.f.job['source_commit'] = self.main
@@ -128,6 +129,8 @@ class RemoteTests(unittest.TestCase):
 
     def test_v3_background_and_incomplete_asset_cleanup(self):
         f = self.f
+        f.input = fixtures.make(f.work / 'current-input', method='picross-difficulty-0.4')
+        f.incoming = io.json_bytes((f.input / 'manifest.json').read_bytes(), current.LIMIT)
         f.publish()
         f.raster_ready()
         options = background_offer(f)
@@ -151,6 +154,13 @@ class RemoteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'asset cleanup open.*' + str(deleted[0])):
             self.execute(req, fresh)
         self.assertEqual(self.post_count, 0)
+        self.fixture.upload('work-prod-' + self.job, 'original-' + 'f' * 64, b'foreign')
+        foreign = self.fixture.next_id
+        with self.assertRaisesRegex(ValueError, 'unbound IDs.*' + str(foreign)):
+            self.execute(req)
+        self.assertEqual(self.post_count, 0)
+        self.assertEqual(self.fixture.assets[foreign], b'foreign')
+        self.fixture.api('releases/assets/' + str(foreign), 'DELETE')  # Independent fixture owner.
         done = self.execute(req)
         self.assertEqual(done['status'], 'checks-passed')
         self.assertEqual(self.execute(req, fresh)['head'], done['head'])
