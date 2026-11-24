@@ -1,4 +1,0 @@
-author: PW-REMOTE-B synthetic test owner
-changes: Synthetic generation
-source: Synthetic T02 geometric drawing
-usage_basis: Original test data created for this isolated review
