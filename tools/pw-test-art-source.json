@@ -1,0 +1,57 @@
+{
+  "commit": "f260d9301e085e57302e461d2dfcb5826a699a82",
+  "files": {
+    "ui/scribble.gd": {
+      "bytes": 2518,
+      "sha256": "33ee9d5f1497a9c6eea3c65d80e10861fe5c147e562982c24cac68c9d07dbc6a"
+    },
+    "ui/clue_typography.gd": {
+      "bytes": 6943,
+      "sha256": "e92e75d7928d6d1ada7357693d5a12f366dbbc05a22c0749379f08d51662cc5c"
+    },
+    "ui/clue_font.tres": {
+      "bytes": 211,
+      "sha256": "38cee56c272ba1d875528d844e4882231a92477de69f67c3a43058da4e5600c6"
+    },
+    "ui/cell_atlas.gd": {
+      "bytes": 1594,
+      "sha256": "85e3bbda8383facd87f43385cc3b7e1baf64fbb9256da5bc887c7f9fec5b2f4d"
+    },
+    "ui/atlas_mask.gdshader": {
+      "bytes": 297,
+      "sha256": "b27c6ffee9cce0296df633a349a1aa286975541ef801923710c465a8c6dd73b6"
+    },
+    "art/book/PlexSans.ttf": {
+      "bytes": 537244,
+      "sha256": "3b031aa4216174205bd8471f88a49b91f093169e9e87bd5262242bc5967fe2e3"
+    },
+    "art/drawing/DelightCoffee-Regular.ttf": {
+      "bytes": 32268,
+      "sha256": "4031afdb556558ffdecd48488fd1ae7eee857e804f4622ac5154cc7bb0c4cb23"
+    },
+    "book/paper.png": {
+      "bytes": 2564246,
+      "sha256": "1af9f61957619d7cea98b69021688b0b78997d84baf93698c9f02dcbb866362f"
+    },
+    "book/paper.png.import": {
+      "bytes": 541,
+      "sha256": "795991150e809dd08a0b97f0595afd323393f1da9c54bf5746070c68d2e54f28"
+    },
+    "art/cells/fill-small.png": {
+      "bytes": 11462,
+      "sha256": "5e1dc76ef5eb9769dd61bf49ff6aba6e68ad99ccfd1247b69715404542ac595a"
+    },
+    "art/cells/fill-small.png.import": {
+      "bytes": 542,
+      "sha256": "794d2cdd301be9677b858b26376b8ad19a5477d0e0228684ff0158a610e992a6"
+    },
+    "art/cells/fill-medium.png": {
+      "bytes": 62134,
+      "sha256": "0f7223a09690d5985a2e6f79d1fec07eb152bde836f910f24c61b945511cf37d"
+    },
+    "art/cells/fill-medium.png.import": {
+      "bytes": 545,
+      "sha256": "8b0c6487f7e93693cef2f4cbc1353546569d8d6809fbba14c041fc7c7d7c03a0"
+    }
+  }
+}
