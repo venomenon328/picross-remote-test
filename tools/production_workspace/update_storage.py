@@ -1,0 +1,177 @@
+"""Private launcher update decisions and owned, flat staging (no checkout I/O)."""
+from dataclasses import dataclass
+from pathlib import Path
+from tools.app_products import PG, PW
+import os
+import secrets
+import stat
+
+from .instance import private_directory
+from .payload import canonical
+from .release_manifest import require, shape, strict_json
+from .release import release
+
+PREFERENCE = 'picross-app-update-preference-v1'
+
+
+def no_links(path):
+    path = Path(os.path.abspath(path))
+    for item in (*reversed(path.parents), path):
+        try:
+            info = item.lstat()
+        except FileNotFoundError:
+            continue
+        require(not stat.S_ISLNK(info.st_mode) and
+                not getattr(info, 'st_file_attributes', 0) & 0x400 and
+                (not stat.S_ISREG(info.st_mode) or info.st_nlink == 1), 'Update path contains a link/reparse point')
+    return path
+
+
+def read_small(path, limit=32768):
+    no_links(path)
+    with path.open('rb') as stream:
+        raw = stream.read(limit + 1)
+    require(len(raw) <= limit, 'Update state exceeds its size limit')
+    return strict_json(raw)
+
+
+def atomic_json(path, value):
+    no_links(path)
+    temporary = path.with_name(path.name + '.' + secrets.token_hex(12) + '.tmp')
+    try:
+        with temporary.open('xb') as stream:
+            stream.write(canonical(value)); stream.flush(); os.fsync(stream.fileno())
+        no_links(path)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+class Preferences:
+    def __init__(self, directory):
+        self.directory = no_links(directory)
+        private_directory(self.directory)
+        self.path = self.directory / 'app-updates.json'
+
+    def read(self):
+        if not self.path.exists():
+            return None
+        value = read_small(self.path, 1024)
+        shape(value, 'format enabled', 'Invalid update preference')
+        require(value['format'] == PREFERENCE and type(value['enabled']) is bool, 'Invalid update preference')
+        return value['enabled']
+
+    def write(self, enabled):
+        require(type(enabled) is bool, 'Explicit update decision required')
+        atomic_json(self.path, {'format': PREFERENCE, 'enabled': enabled})
+
+
+class Stage:
+    """One newly created private directory; cleanup never discovers foreign files."""
+    def __init__(self, launcher):
+        parent = no_links(Path(launcher) / 'update-staging')
+        private_directory(parent)
+        self.path = parent / secrets.token_hex(24)
+        self.path.mkdir(mode=0o700)
+        private_directory(self.path)
+        self.names = set()
+
+    def target(self, name):
+        require(type(name) is str and name and Path(name).name == name and
+                not any(c in name for c in '/\\:') and not name.endswith(('.', ' ')), 'Invalid staging name')
+        path = no_links(self.path / name)
+        self.names.add(name)
+        return path
+
+    def write(self, name, raw):
+        with self.target(name).open('xb') as stream:
+            stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+
+    def cleanup(self):
+        no_links(self.path)
+        for name in self.names:
+            no_links(self.path / name).unlink(missing_ok=True)
+        self.path.rmdir()  # Unknown files cause refusal, never recursive deletion.
+
+
+def accepted_handoff(directory):
+    """PG settings defer while the accepted READY helper owns its stage."""
+    marker = directory / 'update-accepted.json'
+    if not marker.exists():
+        return False
+    value = read_small(marker)
+    shape(value, 'nonce', 'Invalid PG handoff marker')
+    nonce = value['nonce']
+    require(type(nonce) is str and len(nonce) == 48 and
+            all(c in '0123456789abcdef' for c in nonce), 'Invalid PG handoff nonce')
+    active = no_links(directory / 'update-staging' / nonce / 'active')
+    try:
+        with active.open('rb'):
+            return False  # The exclusive FileShare.None handle has ended.
+    except FileNotFoundError:
+        return False
+    except PermissionError:
+        return True
+
+
+@dataclass(frozen=True)
+class Recovery:
+    status: str
+    message: str
+    nonce: str
+
+
+def recover(launcher, *, app=PW):
+    result = recover_result(launcher, app=app)
+    return result.message if result else None
+
+
+def recover_result(launcher, *, app=PW, expected_nonce=None):
+    """Read a result, remove only listed completed handoff files, never resume MSI."""
+    launcher = no_links(launcher)
+    pending = launcher / 'update-pending.json'
+    result = launcher / 'update-result.json'
+    if not pending.exists():
+        return None
+    value = read_small(pending)
+    shape(value, 'format nonce stage version files', 'Invalid pending update')
+    require(value['format'] == 'picross-update-pending-v1' and
+            value['stage'] == value['nonce'] and len(value['stage']) == 48 and
+            all(c in '0123456789abcdef' for c in value['stage']), 'Invalid pending stage')
+    require(expected_nonce is None or value['nonce'] == expected_nonce, 'Unexpected restart handoff')
+    stage = no_links(launcher / 'update-staging' / value['stage'])
+    msi = release(version=value['version'], app=app)['filename']
+    expected = {msi, msi + '.sha256', 'START.txt', 'delivery.json', 'inputs.json',
+                'manifest.json', 'manifest.sig.json', 'UpdateHelper.exe', 'active'}
+    require(type(value['files']) is list and len(value['files']) <= 12 and
+            all(type(n) is str and n and Path(n).name == n and not any(c in n for c in '/\\:') and
+                not n.endswith(('.', ' ')) for n in value['files']), 'Invalid pending inventory')
+    require(set(value['files']) == expected and len(value['files']) == len(expected), 'Unowned pending inventory')
+    if not result.exists():
+        return Recovery('unconfirmed', 'Updateausgang unbestätigt. Anwendung regulär starten; vor erneutem Versuch Installation prüfen.', value['nonce'])
+    report = read_small(result)
+    shape(report, 'format nonce status version', 'Invalid update result')
+    require(report['format'] == 'picross-update-result-v1' and report['nonce'] == value['nonce'] and report['version'] == value['version'] and
+            report['status'] in ('installed', 'failed', 'reboot', 'unconfirmed', 'cancelled'), 'Unbound update result')
+    # FileShare.None held by the helper blocks opening while it is still alive.
+    if stage.exists():
+        if app == PG:
+            require({p.name for p in stage.iterdir()} <= expected, 'Foreign PG stage files')
+        with no_links(stage / 'active').open('a+b'):
+            for name in value['files']:
+                if name != 'active':
+                    no_links(stage / name).unlink(missing_ok=True)
+        (stage / 'active').unlink(missing_ok=True)
+        stage.rmdir()
+    pending.unlink()
+    if app == PG:
+        marker = launcher / 'update-accepted.json'
+        if marker.exists() and read_small(marker) == {'nonce': value['nonce']}:
+            marker.unlink()
+        result.unlink()
+    messages = {'installed': 'Installation bestätigt; Anwendung neu gestartet.',
+                'failed': 'Update fehlgeschlagen. Installation prüfen und bei Bedarf manuell erneut installieren.',
+                'reboot': 'Windows meldet erforderlichen Neustart. Update noch nicht als erfolgreich bestätigt.',
+                'unconfirmed': 'Update oder Wiederanlauf unbestätigt. Installation prüfen und manuell starten.',
+                'cancelled': 'Update abgebrochen; kein automatischer Wiederholungsversuch.'}
+    return Recovery(report['status'], messages[report['status']], value['nonce'])
