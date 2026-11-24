@@ -1,0 +1,4 @@
+author: Codex · PW-INTEGRATION-SLIM synthetic fixture
+changes: Synthetic generation
+source: Synthetic T02 geometric drawing
+usage_basis: Original test data created for this isolated review
