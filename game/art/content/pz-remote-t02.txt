@@ -1,4 +1,0 @@
-author: synthetic test
-changes: synthetic test
-source: synthetic test
-usage_basis: repository test pixels
