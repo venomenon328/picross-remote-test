@@ -1,10 +1,9 @@
 """Produce current raster offers or commit the adapter's exact product delivery."""
 from copy import deepcopy
-from pathlib import Path
 
-from . import production_git_workspace as ws, publish_git, production_remote_pr as prs
+from . import production_git_workspace as ws, publish_git
 from .puzzle_production import authoring_builder, catalog_io as io, content_registry, current_authoring as current
-from .puzzle_production import current_tools, raster_parameters, target_adapter
+from .puzzle_production import current_tools, target_adapter
 from .puzzle_production.authoring_package import require
 
 
@@ -49,7 +48,7 @@ def step3(req, job, root, scratch):
     draft['state'] = 'raster_review'
     current.build({'format': current.REQUEST, 'record': draft, 'expected': io.checksum(current.encoded(job)),
                    'files': files}, output / candidate['id'], root)
-    return {'raster': candidate['id'], 'certified': candidate['certified'], 'files': row['definition'],
+    return {'raster': candidate['id'], 'certified': candidate['certified'], 'files': {k: row[k] for k in candidate['files']},
             'next': 'Inspect the published raster, proof and preview before making a visual judgment.'}
 
 

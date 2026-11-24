@@ -103,6 +103,10 @@ def preflight(root, req, auth):
     if op in ('step3', 'step5') and work != expected:
         require(work and owner(work, parent=expected) == request_id, 'Work changed outside this request')
         record = pw.bound_record(pw.remote_record(work, job), job)
+    if op == 'step3':
+        data = req['input']
+        motif = next((a for a in record['assets'] if a['id'] == record['selected']['motif']), None)
+        require(motif and motif['file']['sha256'] == data['motif_sha256'], 'Selected motif bytes changed')
     if op == 'step5':
         issue = pw.api('issues/' + str(req['issue']))
         require(issue['number'] == req['issue'] and 'pull_request' not in issue, 'Expected production issue')
@@ -120,7 +124,8 @@ def preflight(root, req, auth):
                 'Work record and expected product generation differ')
         pr_owner = owner(req['product'], parent=req['main'] if op == 'status' else None)
         prs.associated(req, pw.api('pulls/' + str(req['pr'])), req['product'], pr_owner, merged=op == 'retire')
-    return {**observed, 'request': request_id, 'record_sha256': req['record_sha256'], 'tool_commit': req['tools'],
+    return {**observed, 'auth_source': os.environ.get('PW_REMOTE_AUTH_KIND') or auth,
+            'request': request_id, 'record_sha256': req['record_sha256'], 'tool_commit': req['tools'],
             'product': product, 'worker': worker, 'package_ci': ci, 'catalog_lease': 'occupied' if lock else 'free',
             'transport': {'invocation': 'expected-new request ref; verify upstream push and Main worker',
                           'originals': 'bound Git and release assets; hashes checked at resume',
@@ -224,7 +229,9 @@ def run(root, req, auth, token, *, diagnose=False):
                 work = pw.push_job(data, job, expected, auth=auth, token=token, remote_request=intent)
         require(git.remote_head(root, 'refs/heads/content/pw/' + job) == work and
                 owner(work, parent=expected) == req_id, 'Work publication not confirmed')
-        result.update(work=work, status='published', next='Inspect the published raster offer.')
+        published = pw.remote_record(work, job)
+        result.update(work=work, published_record_sha256=sha256(published).hexdigest(), status='published',
+                      next='Inspect the published raster offer.')
         if op == 'step5':
             require(git.remote_head(root, 'refs/heads/main') == req['main'] and
                     git.remote_head(root, 'refs/heads/' + prs.product_branch(job)) == product and
@@ -330,7 +337,7 @@ def main():
                     with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
                         print('images=' + str(images).lower(), file=out)
                 else:
-                    pw.delete_ref(root, ref, source)
+                    pw.delete_ref(TOOLS, ref, source)
                     result['request_ref_removed'] = True
             else:
                 req = request(io.json_bytes(sys.stdin.buffer.read(LIMIT + 1), LIMIT))
