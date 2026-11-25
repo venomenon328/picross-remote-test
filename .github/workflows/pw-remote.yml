@@ -242,16 +242,6 @@ jobs:
         with:
           path: ${{ runner.temp }}/pw-editor.zip
           key: ${{ needs.worker.outputs.editor_key }}
-      - name: Isolated recovery fixture interrupts the first result upload
-        if: github.repository_id == '1470169013' && github.run_attempt == 1
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          if gh api "repos/$GITHUB_REPOSITORY/git/commits/$SOURCE" --jq '.message' | grep -Fq '"output":"recovery"'; then
-            echo "D-T02 synthetic fault after confirmed publication and before upload."
-            exit 1
-          fi
       - name: Deliver review originals
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
