@@ -1,4 +1,0 @@
-author: Picross synthetic test
-changes: Vereinfachte Kontur, unabhängige Raster- und Hintergrundableitungen
-source: F-T02 Testdatensatz, aus einer eigenen Zeichnung und Testmatrix
-usage_basis: Eigenes synthetisches Testmotiv
