@@ -1,2 +1,0 @@
-# Same pinned private runtime/build environment as PW.
--r ../production_workspace/requirements-windows.txt
