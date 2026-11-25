@@ -1,0 +1,516 @@
+// Standalone .NET Framework executable. No Python/app DLLs, network download,
+// arbitrary command API, elevation, process kill or root/configuration override.
+using System;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Diagnostics;
+using System.Reflection;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Security.Cryptography;
+using System.Web.Script.Serialization;
+using System.Threading.Tasks;
+using System.Net;
+using System.IO.Pipes;
+
+public static class UpdateHelper {
+    static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 32768, RecursionLimit = 20 };
+    static string User = WindowsIdentity.GetCurrent().User.Value;
+#if PG
+    const string ProductTitle="Picross-Spiel", InstallFolder="PicrossGame", Executable="Picross-Game.exe", UpdateFolder=".updates";
+    const string Upgrade="C1DB6F47-0935-41B8-978E-627D4015B360", RegistryPath=@"Software\PicrossGame\Installer";
+    const string HandoffFormat="picross-pg-update-handoff-v1";
+    const int Minor=1;
+#elif PE
+    const string ProductTitle="Picross-Bestandseditor", InstallFolder="PicrossPuzzleEditor", Executable="Picross-Bestandseditor.exe", UpdateFolder=".updates";
+    const string Upgrade="6A6CBDE3-60BA-4A72-A44E-D1F3AF186985", RegistryPath=@"Software\PicrossPuzzleEditor\Installer";
+    const string HandoffFormat="picross-pe-update-handoff-v1";
+    const int Minor=2;
+#else
+    const string ProductTitle="Picross-Produktionsassistent", InstallFolder="Picross-Produktionsassistent", Executable="Picross-Start.exe", UpdateFolder=".launcher";
+    const string Upgrade="9F958827-537B-4D84-AF17-462F8F78A8D4", RegistryPath=@"Software\PicrossProductionWorkspace\Installer";
+    const string HandoffFormat="picross-update-handoff-v1";
+    const int Minor=1;
+#endif
+    static readonly string Local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    static string Install = Path.Combine(Local, "Programs", InstallFolder);
+    static string Exe = Path.Combine(Install, Executable);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr h, uint ms);
+    [DllImport("kernel32.dll")] static extern uint GetProcessId(IntPtr h);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+    struct ProcessEntry {
+        public uint size, usage, pid; public IntPtr heap; public uint module, threads, parent; public int priority; public uint flags;
+        [MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)] public string name;
+    }
+    [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateToolhelp32Snapshot(uint flags,uint pid);
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern bool Process32First(IntPtr snapshot,ref ProcessEntry entry);
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern bool Process32Next(IntPtr snapshot,ref ProcessEntry entry);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool QueryFullProcessImageName(IntPtr h, uint flags, StringBuilder name, ref uint length);
+    [DllImport("advapi32.dll", SetLastError=true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("msi.dll", CharSet=CharSet.Unicode)] static extern uint MsiGetProductInfoEx(string product, string sid, uint context, string property, StringBuilder value, ref uint size);
+    [DllImport("msi.dll", CharSet=CharSet.Unicode)] static extern uint MsiOpenDatabase(string path, IntPtr persist, out uint database);
+    [DllImport("msi.dll", CharSet=CharSet.Unicode)] static extern uint MsiDatabaseOpenView(uint database, string sql, out uint view);
+    [DllImport("msi.dll")] static extern uint MsiViewExecute(uint view, uint record);
+    [DllImport("msi.dll")] static extern uint MsiViewFetch(uint view, out uint record);
+    [DllImport("msi.dll", CharSet=CharSet.Unicode)] static extern uint MsiRecordGetString(uint record, uint field, StringBuilder text, ref uint length);
+    [DllImport("msi.dll")] static extern uint MsiCloseHandle(uint handle);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int MessageBox(IntPtr window, string text, string title, uint type);
+
+    static void Need(bool condition) { if (!condition) throw new InvalidDataException("Update binding refused"); }
+    static Dictionary<string,object> Map(object o) { var d = o as Dictionary<string,object>; Need(d != null); return d; }
+    static string Text(Dictionary<string,object> d, string k) { Need(d.ContainsKey(k) && d[k] is string); return (string)d[k]; }
+    static long Number(Dictionary<string,object> d, string k) { Need(d.ContainsKey(k) && (d[k] is int || d[k] is long)); return Convert.ToInt64(d[k]); }
+    static void Shape(Dictionary<string,object> d, string fields) { Need(d.Keys.OrderBy(x=>x).SequenceEqual(fields.Split(' ').OrderBy(x=>x))); }
+    static bool Hex(string s, int n) { return s.Length == n && s.All(c=>"0123456789abcdef".Contains(c)); }
+    static string Hash(Stream stream) { stream.Position=0; using(var h=SHA256.Create()) return BitConverter.ToString(h.ComputeHash(stream)).Replace("-", "").ToLowerInvariant(); }
+    static string HashFile(string path) { NoLinks(path); using(var f=File.OpenRead(path)) return Hash(f); }
+    static Dictionary<string,object> Read(string path) { NoLinks(path); Need(new FileInfo(path).Length <= 32768); return Map(Json.DeserializeObject(File.ReadAllText(path, new UTF8Encoding(false, true)))); }
+    static string Quote(string s) { Need(!s.Contains('"') && !s.Contains('\r') && !s.Contains('\n')); return "\"" + s.TrimEnd('\\') + "\""; }
+    static void NoLinks(string path) {
+        for (string p=Path.GetFullPath(path); p!=null; p=Path.GetDirectoryName(p)) {
+            try { Need((File.GetAttributes(p) & FileAttributes.ReparsePoint) == 0); }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+        }
+    }
+    static void Private(string path) {
+        NoLinks(path);
+        var acl = Directory.GetAccessControl(path);
+        Need(acl.GetOwner(typeof(SecurityIdentifier)).Value == User && acl.AreAccessRulesProtected);
+        foreach (FileSystemAccessRule rule in acl.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+            Need(rule.AccessControlType != AccessControlType.Allow || rule.IdentityReference.Value == User || rule.IdentityReference.Value == "S-1-5-18");
+    }
+    static Version VersionOf(string s) {
+        var v = new Version(s);
+        Need(v.Major == 0 && v.Minor == Minor && v.Build >= 0 && v.Build <= 65535 && v.Revision == -1 && v.ToString(3) == s);
+        return v;
+    }
+    static string ProductCode(string version) {
+        byte[] space=new Guid(Upgrade).ToByteArray();
+        Array.Reverse(space,0,4); Array.Reverse(space,4,2); Array.Reverse(space,6,2);
+        byte[] name=Encoding.UTF8.GetBytes(version), data=new byte[space.Length+name.Length];
+        Buffer.BlockCopy(space,0,data,0,space.Length); Buffer.BlockCopy(name,0,data,space.Length,name.Length);
+        byte[] hash; using(var sha=SHA1.Create()) hash=sha.ComputeHash(data);
+        byte[] result=hash.Take(16).ToArray(); result[6]=(byte)((result[6]&15)|80); result[8]=(byte)((result[8]&63)|128);
+        Array.Reverse(result,0,4); Array.Reverse(result,4,2); Array.Reverse(result,6,2);
+        return new Guid(result).ToString().ToUpperInvariant();
+    }
+    static void Installed(string product, string version) {
+        uint size=128; var text=new StringBuilder(128);
+        Need(MsiGetProductInfoEx("{"+product+"}", null, 2, "VersionString", text, ref size) == 0 && text.ToString() == version);
+#if PG
+        using(var key=Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RegistryPath)) {
+            Need(key!=null && Object.Equals(key.GetValue("Version"),version) &&
+                 Object.Equals(key.GetValue("ProductCode"),"{"+product+"}"));
+        }
+#endif
+    }
+    static void MsiIdentity(string path, string version, string product, string upgrade) {
+        uint db; Need(MsiOpenDatabase(path, IntPtr.Zero, out db) == 0);
+        try {
+            foreach(var pair in new Dictionary<string,string>{{"ProductVersion",version},{"ProductCode","{"+product+"}"},{"UpgradeCode","{"+upgrade+"}"}}) {
+                uint view=0, row=0;
+                try {
+                    Need(MsiDatabaseOpenView(db, "SELECT `Value` FROM `Property` WHERE `Property`='"+pair.Key+"'", out view)==0);
+                    Need(MsiViewExecute(view,0)==0 && MsiViewFetch(view,out row)==0);
+                    uint n=128; var text=new StringBuilder(128);
+                    Need(MsiRecordGetString(row,1,text,ref n)==0 && text.ToString()==pair.Value);
+                } finally { if(row!=0) MsiCloseHandle(row); if(view!=0) MsiCloseHandle(view); }
+            }
+        } finally { MsiCloseHandle(db); }
+    }
+    static string BoundedLine(int limit, int timeout) {
+        var task=Task.Factory.StartNew(()=> {
+            var text=new StringBuilder();
+            while(true) { int c=Console.In.Read(); if(c<0) return null; if(c=='\n') return text.ToString(); Need(text.Length<limit); text.Append((char)c); }
+        });
+        Need(task.Wait(timeout)); return task.Result;
+    }
+    static bool ReadyGo(string nonce) {
+        // Exact wire bytes also on Windows with UTF-8 as the active code page.
+        Console.OutputEncoding=new UTF8Encoding(false);
+        Console.Out.NewLine="\n"; Console.WriteLine("READY "+nonce); Console.Out.Flush();
+        return BoundedLine(80,1800000)=="GO "+nonce;
+    }
+    static void ProcessParent(uint child, uint expected) {
+        var snapshot=CreateToolhelp32Snapshot(2,0); Need(snapshot!=new IntPtr(-1));
+        try {
+            var entry=new ProcessEntry(); entry.size=(uint)Marshal.SizeOf(entry); bool found=false;
+            if(Process32First(snapshot,ref entry)) do {
+                if(entry.pid==child) { Need(entry.parent==expected); found=true; break; }
+            } while(Process32Next(snapshot,ref entry));
+            Need(found);
+        } finally { CloseHandle(snapshot); }
+    }
+    static void Parent(IntPtr handle, Dictionary<string,object> d) {
+        Need(handle!=IntPtr.Zero && GetProcessId(handle)==Number(d,"pid") && WaitForSingleObject(handle,0)==258);
+        ProcessParent((uint)Process.GetCurrentProcess().Id, checked((uint)Number(d,"pid")));
+        var image=new StringBuilder(32768); uint n=32768;
+        Need(QueryFullProcessImageName(handle,0,image,ref n) && String.Equals(image.ToString(),Exe,StringComparison.OrdinalIgnoreCase));
+        IntPtr token; Need(OpenProcessToken(handle,8,out token));
+        try { using(var id=new WindowsIdentity(token)) Need(id.User.Value==User); } finally { CloseHandle(token); }
+        Need(HashFile(Exe)==Text(d,"old_exe_sha256"));
+        var pe=FileVersionInfo.GetVersionInfo(Exe); var old=VersionOf(Text(d,"old_version"));
+        Need(pe.FileMajorPart==old.Major && pe.FileMinorPart==old.Minor && pe.FileBuildPart==old.Build && pe.FilePrivatePart==0);
+        Installed(Text(d,"old_product"),Text(d,"old_version"));
+        var components=Read(Path.Combine(Install,"components.json"));
+        Need(Text(components,"version")==Text(d,"old_version") && Text(components,"commit")==Text(d,"old_commit") &&
+             Text(components,"product_code")==Text(d,"old_product") && Text(components,"upgrade_code")==Text(d,"upgrade"));
+#if PG
+        Need(Text(components,"format")=="picross-pg-build-v2" &&
+             Text(components,"payload_fingerprint")==Text(d,"old_fingerprint"));
+#endif
+    }
+    static void WaitParent(IntPtr handle) {
+        // Only called after explicit drain acknowledgement. A live handle remains
+        // bound to the original process even if its PID is subsequently reused.
+        Need(WaitForSingleObject(handle,120000)==0);
+    }
+    static void State(Dictionary<string,object> d) {
+        string state=Text(d,"state"); NoLinks(state);
+        var hashes=Map(d["state_hashes"]);
+#if PG
+        Shape(hashes,".updates/app-updates.json");
+#elif PE
+        Shape(hashes,"config.json .updates/app-updates.json");
+#else
+        Shape(hashes,"config.json .launcher/address.json .launcher/app-updates.json");
+#endif
+        foreach(var pair in hashes) {
+            string path=Path.Combine(state,pair.Key); NoLinks(path);
+#if PE
+            if(pair.Key=="config.json" && pair.Value==null) { Need(!File.Exists(path) && !Directory.Exists(path)); continue; }
+#endif
+            Need(pair.Value is string && HashFile(path)==(string)pair.Value);
+        }
+        var preference=Read(Path.Combine(state,UpdateFolder,"app-updates.json"));
+        Shape(preference,"format enabled");
+        Need(Text(preference,"format")=="picross-app-update-preference-v1" && preference["enabled"] is bool && (bool)preference["enabled"]);
+    }
+    static void Report(string state, string nonce, string status, string version) {
+        string path=Path.Combine(state,UpdateFolder,"update-result.json"); NoLinks(path);
+        string temp=path+"."+nonce+".tmp";
+        using(var file=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None)) {
+            var bytes=Encoding.UTF8.GetBytes(Json.Serialize(new Dictionary<string,object>{{"format","picross-update-result-v1"},{"nonce",nonce},{"status",status},{"version",version}})+"\n");
+            file.Write(bytes,0,bytes.Length); file.Flush(true);
+        }
+        if(File.Exists(path)) File.Replace(temp,path,null); else File.Move(temp,path);
+    }
+    static string Mac(string key, string prefix, SortedDictionary<string,object> value) {
+        using(var h=new HMACSHA256(Encoding.ASCII.GetBytes(key)))
+            return BitConverter.ToString(h.ComputeHash(Encoding.ASCII.GetBytes(prefix+Json.Serialize(value)))).Replace("-","").ToLowerInvariant();
+    }
+#if PE || PG
+    [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetNamedPipeClientProcessId(IntPtr pipe,out uint pid);
+    static string RandomHex() { byte[] b=new byte[24]; using(var r=RandomNumberGenerator.Create()) r.GetBytes(b); return BitConverter.ToString(b).Replace("-","").ToLowerInvariant(); }
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr OpenEvent(uint access,bool inherit,string name);
+    static void RunningMarker() {
+        IntPtr h=OpenEvent(0x100000,false,@"Global\"+InstallFolder+".Running."+User);
+        Need(h!=IntPtr.Zero); CloseHandle(h);
+    }
+#endif
+#if PE
+    static void Selection(string raw) {
+        Need(raw.Length<=32768 && raw.All(c=>c<128));
+        var value=Map(Json.DeserializeObject(raw)); Shape(value,"checkout port");
+        Need(Text(value,"checkout").Length<=8192 && Text(value,"port").Length<=16);
+    }
+    static void EditorReady(NamedPipeServerStream pipe, Process launched, Dictionary<string,object> d, string key, IAsyncResult connected) {
+        Need(connected.AsyncWaitHandle.WaitOne(30000)); pipe.EndWaitForConnection(connected);
+        uint pid; Need(GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(),out pid) && pid==launched.Id && !launched.HasExited);
+        string challenge=RandomHex();
+        var writer=new StreamWriter(pipe,new UTF8Encoding(false),1024,true); writer.NewLine="\n";
+        writer.WriteLine(challenge); writer.Flush();
+        var reader=new StreamReader(pipe,new UTF8Encoding(false,true),false,1024,true);
+        var response=Task.Factory.StartNew(()=> { var b=new StringBuilder(); while(true) { int c=reader.Read(); if(c<0) throw new EndOfStreamException(); if(c=='\n') return b.ToString(); Need(b.Length<8192); b.Append((char)c); } });
+        Need(response.Wait(10000)); var reply=Map(Json.DeserializeObject(response.Result));
+        Shape(reply,"pid commit state selection challenge config proof"); string proof=Text(reply,"proof"); reply.Remove("proof");
+        string expected=Mac(key,"pe-ready:",new SortedDictionary<string,object>(reply,StringComparer.Ordinal));
+        Need(proof.Length==expected.Length); int difference=0; for(int i=0;i<proof.Length;i++) difference|=proof[i]^expected[i];
+        Need(difference==0 && Number(reply,"pid")==launched.Id && Text(reply,"commit")==Text(d,"commit") &&
+             Text(reply,"state")==Hash(new MemoryStream(Encoding.UTF8.GetBytes(Text(d,"state")))) && Text(reply,"challenge")==challenge &&
+             Text(reply,"selection")==Hash(new MemoryStream(Encoding.ASCII.GetBytes(Text(d,"selection")))) &&
+             Object.Equals(reply["config"],Map(d["state_hashes"])["config.json"]) && !launched.HasExited);
+        State(d);
+    }
+    static void RestartEditor(Dictionary<string,object> d) {
+        string nonce=RandomHex(), key=RandomHex(), name="PicrossPEReady-"+nonce;
+        var security=new PipeSecurity(); security.SetAccessRuleProtection(true,false);
+        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(User),PipeAccessRights.FullControl,AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier("S-1-5-18"),PipeAccessRights.FullControl,AccessControlType.Allow));
+        using(var pipe=new NamedPipeServerStream(name,PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous,4096,4096,security)) {
+            var info=RestartInfo(Text(d,"state"),true);
+            info.EnvironmentVariables["PICROSS_PE_READY_NONCE"]=nonce;
+            info.EnvironmentVariables["PICROSS_PE_READY_KEY"]=key;
+            info.EnvironmentVariables["PICROSS_PE_READY_SELECTION"]=Text(d,"selection");
+            var connected=pipe.BeginWaitForConnection(null,null);
+            using(var launched=Process.Start(info)) {
+                EditorReady(pipe,launched,d,key,connected);
+            }
+        }
+    }
+#endif
+#if PG
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+
+    static void UserImage(IntPtr process, string expected) {
+        var image=new StringBuilder(32768); uint length=32768;
+        Need(WaitForSingleObject(process,0)==258 && QueryFullProcessImageName(process,0,image,ref length) &&
+             String.Equals(image.ToString(),expected,StringComparison.OrdinalIgnoreCase));
+        IntPtr token; Need(OpenProcessToken(process,8,out token));
+        try { using(var identity=new WindowsIdentity(token)) Need(identity.User.Value==User); }
+        finally { CloseHandle(token); }
+    }
+
+    static Dictionary<string,object> Reply(StreamReader reader, int timeout, string key, string domain, string fields) {
+        var response=Task.Factory.StartNew(()=> {
+            var text=new StringBuilder();
+            while(true) {
+                int c=reader.Read();
+                if(c<0) throw new EndOfStreamException();
+                if(c=='\n') return text.ToString();
+                Need(text.Length<4096); text.Append((char)c);
+            }
+        });
+        Need(response.Wait(timeout));
+        var reply=Map(Json.DeserializeObject(response.Result));
+        Shape(reply,fields+" proof");
+        string proof=Text(reply,"proof"); reply.Remove("proof");
+        string expected=Mac(key,domain,new SortedDictionary<string,object>(reply,StringComparer.Ordinal));
+        Need(Hex(proof,expected.Length));
+        int difference=0;
+        for(int i=0;i<proof.Length;i++) difference|=proof[i]^expected[i];
+        Need(difference==0);
+        return reply;
+    }
+    static void LauncherReady(NamedPipeServerStream pipe, Process launched, Dictionary<string,object> d, string key, IAsyncResult connected) {
+        Need(connected.AsyncWaitHandle.WaitOne(30000)); pipe.EndWaitForConnection(connected);
+        uint pid;
+        Need(GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(),out pid) && pid==launched.Id);
+        UserImage(launched.Handle,Exe);
+        string challenge=RandomHex();
+        string state=Hash(new MemoryStream(Encoding.UTF8.GetBytes(Text(d,"state"))));
+        string preference=Text(Map(d["state_hashes"]),".updates/app-updates.json");
+        var expected=new SortedDictionary<string,object>(StringComparer.Ordinal){
+            {"pid",launched.Id},{"commit",Text(d,"commit")},{"version",Text(d,"version")},{"fingerprint",Text(d,"fingerprint")},
+            {"state",state},{"preference",preference},{"challenge",challenge}
+        };
+        const string Fields="pid commit version fingerprint state preference challenge";
+        using(var writer=new StreamWriter(pipe,new UTF8Encoding(false),1024,true))
+        using(var reader=new StreamReader(pipe,new UTF8Encoding(false,true),false,1024,true)) {
+            writer.NewLine="\n"; writer.WriteLine(challenge); writer.Flush();
+            var ready=Reply(reader,20000,key,"pg-launcher-ready:",Fields+" window");
+            Need(expected.All(pair=>Object.Equals(pair.Value,ready[pair.Key])));
+            State(d);
+            UserImage(launched.Handle,Exe);
+            var window=new IntPtr(Number(ready,"window"));
+            Need(GetWindowThreadProcessId(window,out pid)!=0 && pid==launched.Id && IsWindowVisible(window));
+        }
+    }
+
+    static void RestartGame(Dictionary<string,object> d) {
+        string nonce=RandomHex(), key=RandomHex();
+        var security=new PipeSecurity();
+        security.SetAccessRuleProtection(true,false);
+        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(User),PipeAccessRights.FullControl,AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier("S-1-5-18"),PipeAccessRights.FullControl,AccessControlType.Allow));
+        using(var pipe=new NamedPipeServerStream("PicrossPGReady-"+nonce,PipeDirection.InOut,1,PipeTransmissionMode.Byte,
+                                                 PipeOptions.Asynchronous,4096,4096,security)) {
+            var info=new ProcessStartInfo(Exe,"--launcher-restart") { UseShellExecute=false, WorkingDirectory=Install };
+            info.EnvironmentVariables["PYINSTALLER_RESET_ENVIRONMENT"]="1";
+            info.EnvironmentVariables["PICROSS_PG_RESTART_PIPE"]=nonce;
+            info.EnvironmentVariables["PICROSS_PG_RESTART_KEY"]=key;
+            info.EnvironmentVariables["PICROSS_PG_RESTART_PID"]=Process.GetCurrentProcess().Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            info.EnvironmentVariables["PICROSS_PG_RESTART_STAGE"]=Text(d,"nonce");
+            var connected=pipe.BeginWaitForConnection(null,null);
+            using(var launched=Process.Start(info)) LauncherReady(pipe,launched,d,key,connected);
+        }
+    }
+#endif
+
+#if !PG
+    static bool Ready(Process launched, Dictionary<string,object> d) {
+        string state=Text(d,"state");
+        int port=Convert.ToInt32(Read(Path.Combine(state,UpdateFolder,"address.json"))["port"]);
+        for(int attempt=0; attempt<100; attempt++) {
+            if(launched.HasExited) return false;
+            try {
+                var m=Read(Path.Combine(state,UpdateFolder,"instance.json"));
+                Need(Number(m,"pid")==launched.Id && Text(m,"build")==Text(d,"commit") && Number(m,"port")==port &&
+                     Text(m,"instance")!=Text(d,"instance") && Text(m,"protocol")=="picross-launcher-v1");
+                byte[] nonce=new byte[24]; using(var random=RandomNumberGenerator.Create()) random.GetBytes(nonce);
+                string challenge=BitConverter.ToString(nonce).Replace("-","").ToLowerInvariant();
+                var body=new SortedDictionary<string,object>(StringComparer.Ordinal){{"action","identify"},{"challenge",challenge}};
+                body["proof"]=Mac(Text(m,"key"),"request:",body);
+                byte[] bytes=Encoding.ASCII.GetBytes(Json.Serialize(body));
+                var request=(HttpWebRequest)WebRequest.Create("http://127.0.0.1:"+port+"/control/v1");
+                request.Proxy=null; request.AllowAutoRedirect=false; request.Timeout=1000; request.ReadWriteTimeout=1000;
+                request.Method="POST"; request.ContentType="application/json"; request.ContentLength=bytes.Length;
+                using(var stream=request.GetRequestStream()) stream.Write(bytes,0,bytes.Length);
+                using(var response=request.GetResponse()) using(var stream=response.GetResponseStream()) using(var output=new MemoryStream()) {
+                    var buffer=new byte[8193]; int count=stream.Read(buffer,0,buffer.Length); output.Write(buffer,0,count);
+                    while(count>0 && output.Length<=8192) { count=stream.Read(buffer,0,buffer.Length); output.Write(buffer,0,count); }
+                    Need(output.Length<=8192);
+                    var reply=Map(Json.DeserializeObject(Encoding.UTF8.GetString(output.ToArray())));
+                    Shape(reply,"protocol build instance challenge state proof"); string proof=Text(reply,"proof"); reply.Remove("proof");
+                    string expected=Mac(Text(m,"key"),"response:",new SortedDictionary<string,object>(reply,StringComparer.Ordinal));
+                    Need(proof.Length==expected.Length); int difference=0; for(int i=0;i<proof.Length;i++) difference|=proof[i]^expected[i];
+                    Need(difference==0 && Text(reply,"challenge")==challenge && Text(reply,"build")==Text(d,"commit") &&
+                         Text(reply,"instance")==Text(m,"instance") && Text(reply,"protocol")=="picross-launcher-v1" && Text(reply,"state")=="ready");
+                }
+                return true;
+            } catch(Exception) { System.Threading.Thread.Sleep(200); }
+        }
+        return false;
+    }
+    static ProcessStartInfo RestartInfo(string state, bool noBrowser) {
+        var info=new ProcessStartInfo(Exe,"--state "+Quote(state)
+#if !PE
+            +(noBrowser?" --no-browser":"")
+#endif
+            ) {
+            UseShellExecute=false, WorkingDirectory=Install };
+        // A fresh top-level bootloader, not a worker inheriting the old frozen runtime.
+        info.EnvironmentVariables["PYINSTALLER_RESET_ENVIRONMENT"]="1";
+        return info;
+    }
+#endif
+    public static int Main(string[] args) {
+        string state=null, nonce=null, version=null, outcome="unconfirmed";
+        IntPtr parent=IntPtr.Zero; var streams=new List<FileStream>(); FileStream active=null;
+        bool bound=false, committed=false;
+        try {
+            Console.InputEncoding=new UTF8Encoding(false,true);
+            Need(args.Length==0 && !new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator));
+            string line=BoundedLine(32768,20000); Need(line!=null);
+            var d=Map(Json.DeserializeObject(line));
+            Shape(d,"format nonce state pid old_version old_product old_commit old_exe_sha256 version product upgrade commit binding files state_hashes exe_sha256 exe_bytes parent_handle"
+#if PG
+                +" old_fingerprint fingerprint"
+#else
+                +" instance no_browser"
+#if PE
+                +" selection"
+#endif
+#endif
+                );
+            Need(Text(d,"format")==HandoffFormat);
+#if PG
+            Need(Hex(Text(d,"old_fingerprint"),64) && Hex(Text(d,"fingerprint"),64));
+#else
+            Need(d["no_browser"] is bool);
+#endif
+            nonce=Text(d,"nonce"); state=Text(d,"state"); version=Text(d,"version");
+            Need(Hex(nonce,48) && Path.IsPathRooted(state) && Path.GetFullPath(state)==state &&
+                 !String.Equals(state,Install,StringComparison.OrdinalIgnoreCase) && !state.StartsWith(Install+"\\",StringComparison.OrdinalIgnoreCase) &&
+                 Hex(Text(d,"binding"),64) && Hex(Text(d,"commit"),40) && Hex(Text(d,"exe_sha256"),64) && Number(d,"exe_bytes")>0 &&
+                 VersionOf(version)>VersionOf(Text(d,"old_version")));
+            Need(Text(d,"upgrade")==Upgrade && Text(d,"product")==ProductCode(version) && Text(d,"old_product")==ProductCode(Text(d,"old_version")));
+#if PG
+            Need(String.Equals(state,Path.Combine(Local,InstallFolder),StringComparison.OrdinalIgnoreCase));
+#endif
+            string stage=Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            Need(String.Equals(stage,Path.Combine(state,UpdateFolder,"update-staging",nonce),StringComparison.OrdinalIgnoreCase));
+            Private(stage); Private(Path.Combine(state,UpdateFolder)); NoLinks(Install);
+            parent=new IntPtr(Number(d,"parent_handle")); Parent(parent,d); State(d);
+#if PG
+            RunningMarker();
+#elif PE
+            Need((bool)d["no_browser"] && Hex(Text(d,"instance"),48));
+            Selection(Text(d,"selection")); RunningMarker();
+#else
+            var instance=Read(Path.Combine(state,UpdateFolder,"instance.json"));
+            Need(Text(instance,"instance")==Text(d,"instance") && Number(instance,"pid")==Number(d,"pid") && Text(instance,"build")==Text(d,"old_commit"));
+#endif
+            active=new FileStream(Path.Combine(stage,"active"),FileMode.CreateNew,FileAccess.ReadWrite,FileShare.None);
+            string msi=ProductTitle+"-"+version+"-windows-x64.msi";
+            var files=Map(d["files"]);
+            Shape(files,msi+" "+msi+".sha256 START.txt delivery.json inputs.json manifest.json manifest.sig.json");
+            long total=0;
+            foreach(var pair in files) {
+                var binding=Map(pair.Value); Shape(binding,"bytes sha256");
+                long size=Number(binding,"bytes"); total+=size; Need(size>0 && total<=513L*1024*1024 && Hex(Text(binding,"sha256"),64));
+                string path=Path.Combine(stage,pair.Key); NoLinks(path);
+                var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read); streams.Add(file);
+                Need(file.Length==size && Hash(file)==Text(binding,"sha256"));
+            }
+            Need(HashFile(Path.Combine(stage,"manifest.json"))==Text(d,"binding"));
+            MsiIdentity(Path.Combine(stage,msi),version,Text(d,"product"),Text(d,"upgrade"));
+            bound=true;
+            if(!ReadyGo(nonce)) { outcome="cancelled"; return 2; }
+            committed=true;
+            WaitParent(parent); CloseHandle(parent); parent=IntPtr.Zero;
+            State(d); Installed(Text(d,"old_product"),Text(d,"old_version"));
+#if PG
+            var accepted=Read(Path.Combine(state,UpdateFolder,"update-accepted.json"));
+            Shape(accepted,"nonce"); Need(Text(accepted,"nonce")==nonce);
+#endif
+            // Rehash every locked candidate immediately before invoking system MSI.
+            int index=0; foreach(var pair in files) Need(Hash(streams[index++])==Text(Map(pair.Value),"sha256"));
+            MsiIdentity(Path.Combine(stage,msi),version,Text(d,"product"),Text(d,"upgrade"));
+            bool desktop=false;
+            using(var key=Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RegistryPath))
+                desktop=key!=null && Object.Equals(key.GetValue("DesktopShortcut"),1);
+#if PG
+            const string installerUi = "/passive";
+#else
+            const string installerUi = "/qn";
+#endif
+            var info=new ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"msiexec.exe"),
+                "/i "+Quote(Path.Combine(stage,msi))+" "+installerUi+" /norestart ALLUSERS=2 MSIINSTALLPERUSER=1 REBOOT=ReallySuppress MSIRESTARTMANAGERCONTROL=Disable"+(desktop?" INSTALLDESKTOP=1":"")) {
+                UseShellExecute=false, CreateNoWindow=true, WorkingDirectory=stage };
+            int code;
+            using(var installer=Process.Start(info)) { installer.WaitForExit(); code=installer.ExitCode; }
+            if(code==3010 || code==1641) { outcome="reboot"; return 3; }
+            if(code!=0) { outcome="failed"; return 2; }
+            Installed(Text(d,"product"),version); State(d);
+            var components=Read(Path.Combine(Install,"components.json"));
+            Need(Text(components,"version")==version && Text(components,"commit")==Text(d,"commit") && Text(components,"product_code")==Text(d,"product"));
+            Need(HashFile(Exe)==Text(d,"exe_sha256") && new FileInfo(Exe).Length==Number(d,"exe_bytes"));
+            var pe=FileVersionInfo.GetVersionInfo(Exe);
+            Need(pe.FileMajorPart==0 && pe.FileMinorPart==Minor && pe.FileBuildPart==VersionOf(version).Build && pe.FilePrivatePart==0);
+#if PG
+            Need(Text(components,"format")=="picross-pg-build-v2" && Text(components,"upgrade_code")==Upgrade &&
+                 Text(components,"payload_fingerprint")==Text(d,"fingerprint"));
+            NoLinks(Exe);
+            using(var launcher=new FileStream(Exe,FileMode.Open,FileAccess.Read,FileShare.Read)) {
+                Need(launcher.Length==Number(d,"exe_bytes") && Hash(launcher)==Text(d,"exe_sha256"));
+                RestartGame(d);
+            }
+#elif PE
+            RestartEditor(d);
+#else
+            using(var launched=Process.Start(RestartInfo(state,(bool)d["no_browser"]))) Need(Ready(launched,d));
+#endif
+            outcome="installed";
+            return 0;
+        } catch(Exception) { return 2; }
+        finally {
+            foreach(var stream in streams) stream.Dispose();
+            if(parent!=IntPtr.Zero) CloseHandle(parent);
+            if(bound) {
+                try { Report(state,nonce,outcome,version); } catch(Exception) { outcome="unconfirmed"; }
+                if(committed && outcome!="installed") MessageBox(IntPtr.Zero,
+                    "App-Update nicht erfolgreich bestätigt ("+outcome+"). Windowsinstallation prüfen. Danach die Anwendung manuell starten oder einen geprüften neueren Installer erneut ausführen. Es wurde kein Prozess beendet und kein automatischer Wiederholungsversuch gestartet.",
+                    "Picross · App-Update",0x10);
+#if !PG
+                // Delete only the seven fixed inputs after the installer has ended.
+                // This running EXE and its lock are reclaimed by the next launcher.
+                try {
+                    string stage=Path.Combine(state,UpdateFolder,"update-staging",nonce);
+                    string msi=ProductTitle+"-"+version+"-windows-x64.msi";
+                    foreach(string name in new[]{msi,msi+".sha256","START.txt","delivery.json","inputs.json","manifest.json","manifest.sig.json"}) {
+                        string path=Path.Combine(stage,name); NoLinks(path); File.Delete(path);
+                    }
+                } catch(Exception) { }
+#endif
+            }
+            if(active!=null) active.Dispose();
+        }
+    }
+}
