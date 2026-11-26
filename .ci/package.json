@@ -1,1 +1,15 @@
-{"core_change":null,"evidence":{"expires":null,"mode":"none","purpose":null},"format":"development-ci-plan/v1","issue":"https://github.com/venomenon328/picross-remote-test/issues/1","modules":[],"omitted":"Reine Inhaltsintegration. Adapter und registrierte Lieferung im Produktionslauf geprüft.","package":"Integration-pz-integration-slim-t02","purpose":"Gewählte finale Rätseldaten registrieren.","test_changes":[]}
+{
+  "core_change": "Validate the isolated CAT-CONS fixture with the pinned product reader. The synthetic repository has no player project.",
+  "evidence": {
+    "expires": null,
+    "mode": "none",
+    "purpose": null
+  },
+  "format": "development-ci-plan/v1",
+  "issue": "https://github.com/venomenon328/picross-remote-test/issues/1",
+  "modules": [],
+  "omitted": "Synthetic fixture data only. The current reader checked the row and eight bound files. No product code changed.",
+  "package": "PW-IMPORT-A-T02-Catalog",
+  "purpose": "Bind the existing synthetic runtime row to the matching CAT-CONS record and Test category.",
+  "test_changes": []
+}
