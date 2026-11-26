@@ -180,10 +180,19 @@ def load_plan(base, head, event, *, modules='', repository='venomenon328/picross
                    'purpose': 'Explicit module dispatch' if selected else 'Core integration',
                    'evidence': {'mode': 'none', 'purpose': None, 'expires': None}}
         raw = json.dumps(package, sort_keys=True)
+    player = player_requirement(changed, selected, event=event, nonregular=nonregular)
+    if repository == 'venomenon328/picross-remote-test' and not selected and not nonregular and event != 'workflow_dispatch':
+        catalog = {PLAN_PATH, 'content/categories.json', 'game/data/registry.json'}
+        # Introduce the checked fixture profile on its known pre-CAT baseline.
+        if base == '3b661875118d747380532cc8e6423608cd5473ff':
+            catalog.update({'tools/ci_modular.py', 'tools/check_docs.py', 'tools/verify_fixture_catalog.py'})
+        if changed and all(path in catalog or re.fullmatch(r'content/puzzles/pz-[a-z0-9][a-z0-9-]{0,59}\.json', path)
+                           for path in changed):
+            player = {'required': False, 'reason': 'Isolated synthetic record/projection checked by the pinned CAT-CONS reader'}
     return {'format': 'development-ci-run/v1', 'source_head': head, 'base_commit': base,
             'tested_checkout': checkout, 'event': event, 'run_id': os.environ.get('GITHUB_RUN_ID', 'local'),
             'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT', '1'), 'modules': selected,
-            'player': player_requirement(changed, selected, event=event, nonregular=nonregular),
+            'player': player,
             'package': package, 'plan_sha256': hashlib.sha256(raw.encode()).hexdigest()}
 
 

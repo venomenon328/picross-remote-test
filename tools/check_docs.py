@@ -161,6 +161,9 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     args = parser.parse_args()
     errors = check_tree(args.root)
+    if __import__('os').environ.get('GITHUB_REPOSITORY') == 'venomenon328/picross-remote-test':
+        from verify_fixture_catalog import verify
+        verify(args.root)
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
