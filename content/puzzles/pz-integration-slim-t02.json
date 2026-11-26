@@ -1,0 +1,196 @@
+{
+  "added": {
+    "added_at": "2026-11-24T22:30:54Z",
+    "provenance": {
+      "commit": null,
+      "evidence": null,
+      "kind": "registration",
+      "reason": "Successful first playable registration in the shared transaction.",
+      "reference_time": "2026-11-24T22:30:54Z"
+    }
+  },
+  "background": {
+    "asset": {
+      "bytes": 50495,
+      "file": "game/art/backgrounds/pz-integration-slim-t02.png",
+      "sha256": "3d1961c27c2085901ee1938af38ab88c6a8c14711aaafd94c3cb6f3f1a35917b"
+    },
+    "image_revision": 1,
+    "status": "selected"
+  },
+  "category_id": "test",
+  "definition": {
+    "bytes": 621,
+    "file": "game/data/content/pz-integration-slim-t02.json",
+    "sha256": "b25a9946c1e1b6f86bb5cf1e65607bed3f51b9ee87b180fb790c9a900fac94a2"
+  },
+  "difficulty": {
+    "compact_analysis": {
+      "analysis_hash": "fc7db2611117d5b52fa38d1cfd1929124103da684d9a4fa655345ea4bc2dd549",
+      "deduction_complete": true,
+      "line_analysis_complete": true,
+      "line_fixpoint_confirmed": true,
+      "new_singletons": 25,
+      "profiles_hash": "f25b74ba46d3d6bbc9df594838ed2114e89e0a0ecfe6ef1dc2469f9fe55fb970",
+      "r4": null,
+      "reason": null,
+      "result_hash": "9a36f33128f3a9328a1315d5773c4b7b049de21c82843d9faec04c9418c9feaa",
+      "status": "solved",
+      "structure": {
+        "adjacent_color_changes": 0,
+        "cells": 25,
+        "clue_length_histogram": {
+          "1": 4,
+          "3": 4,
+          "5": 2
+        },
+        "colors": 1,
+        "geometric_slack": 24,
+        "height": 5,
+        "mandatory_gaps": 0,
+        "short_blocks": 4,
+        "total_clue_length": 26,
+        "total_clues": 10,
+        "width": 5
+      },
+      "trace_hash": "4c86613f62a08e483f40e4230f5fbb8f9492bc58f7f1ceee2e8e5614958a1747",
+      "wave_count": 3
+    },
+    "logic_binding": {
+      "matrix_hash": "390c21832bf0a3aef4ed9d2c042e673e1548495c3b2054212ab02dc94f64fc3d"
+    },
+    "rating": {
+      "analysis_result_hash": "9a36f33128f3a9328a1315d5773c4b7b049de21c82843d9faec04c9418c9feaa",
+      "format": "picross-catalog-sd2-rating-v1",
+      "method": "picross-difficulty-0.4",
+      "method_hash": "5508f0742aa858a6adc31aa621433e68298b915fb0fd6b8d9e74e576ba87caaf",
+      "rating_hash": "414c66b0daa83579fb88f7d690db67e9ae0f319106564669829bc963d9bf9d83",
+      "result": {
+        "analysis_result_hash": "9a36f33128f3a9328a1315d5773c4b7b049de21c82843d9faec04c9418c9feaa",
+        "assessment": {
+          "boundaries": {
+            "distance_lower": null,
+            "distance_upper": [
+              3,
+              4
+            ],
+            "lower": null,
+            "nearest_distance": [
+              3,
+              4
+            ],
+            "upper": [
+              1,
+              1
+            ]
+          },
+          "contributions": {
+            "demand": [
+              1,
+              4
+            ],
+            "search": [
+              0,
+              1
+            ],
+            "workload": [
+              0,
+              1
+            ]
+          },
+          "level": 1,
+          "level_without_workload": 1,
+          "score": [
+            1,
+            4
+          ],
+          "signals": {
+            "context": [
+              0,
+              1
+            ],
+            "fluent": true,
+            "highest_family": "E1",
+            "longest_narrow_run": 0,
+            "narrow_waves": 0,
+            "peak_search": [
+              0,
+              1
+            ],
+            "raw_workload": [
+              0,
+              1
+            ],
+            "spans": 17,
+            "workload_ceiling": 3,
+            "workload_guard": "fluent"
+          },
+          "without_workload": [
+            1,
+            4
+          ]
+        },
+        "confidence": "medium",
+        "estimated_minutes": null,
+        "explanation": "Model estimate from synthetic references; no human calibration or time estimate. Demand, search and bounded workload use independently checked line profiles.",
+        "format": "picross-sd2-rating-v1",
+        "method": "picross-difficulty-0.4",
+        "method_hash": "5508f0742aa858a6adc31aa621433e68298b915fb0fd6b8d9e74e576ba87caaf",
+        "profile_scope": "complete_line",
+        "reason": "complete_line",
+        "status": "rated"
+      },
+      "source": {
+        "bytes": 621,
+        "definition_id": "pz-integration-slim-t02",
+        "engine_logic_hash": "314ea54099c2cd9cf67d86e63ec7d1be21ae17831cbe15c6c3733062c06c2be9",
+        "kind": "runtime",
+        "production_mode": "unknown",
+        "runtime_revision": 1,
+        "sha256": "b25a9946c1e1b6f86bb5cf1e65607bed3f51b9ee87b180fb790c9a900fac94a2"
+      }
+    },
+    "rating_revision": 1
+  },
+  "format": "picross-puzzle-record-v1",
+  "id": "pz-integration-slim-t02",
+  "mode": "mono",
+  "name": "Synthetic diamond",
+  "reveal": {
+    "asset": {
+      "bytes": 199,
+      "file": "game/art/content/pz-integration-slim-t02.png",
+      "sha256": "cd8d075da3cb5f1e43c2f0b516e7adf8af9f27fa0ca0bb003ea02555840e36f1"
+    },
+    "catalog": {
+      "generator": "picross-catalog-reveal-1",
+      "profiles": [
+        {
+          "asset": {
+            "bytes": 167,
+            "file": "game/art/catalog/pz-integration-slim-t02-ui100.png",
+            "sha256": "fa12652508c795bfdf06cb2b9c90d87385791eb30f8b2e8067362b517ae42f66"
+          },
+          "height": 50,
+          "profile": "catalog-ui100-v1",
+          "width": 50
+        },
+        {
+          "asset": {
+            "bytes": 167,
+            "file": "game/art/catalog/pz-integration-slim-t02-ui125.png",
+            "sha256": "fa12652508c795bfdf06cb2b9c90d87385791eb30f8b2e8067362b517ae42f66"
+          },
+          "height": 50,
+          "profile": "catalog-ui125-v1",
+          "width": 50
+        }
+      ],
+      "source_height": 50,
+      "source_width": 50
+    },
+    "image_revision": 1
+  },
+  "save_slot": "pz-integration-slim-t02",
+  "visible": true
+}
